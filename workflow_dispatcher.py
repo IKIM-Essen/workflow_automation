@@ -2,12 +2,12 @@
 
 import csv
 import re
+import subprocess
 from pathlib import Path
 from datetime import datetime
 
 
 WORKFLOW_DIR = Path("workflows")
-
 
 
 def load_workflow_config(csv_file: Path):
@@ -69,8 +69,9 @@ def write_sample_sheet(samples, workflow_path: Path):
     pep_dir = workflow_path / "config" / "pep"
     pep_dir.mkdir(parents=True, exist_ok=True)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = pep_dir / f"samples_{timestamp}.csv"
+    # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # output_file = pep_dir / f"samples_{timestamp}.csv"
+    output_file = pep_dir / f"samples.csv"
 
     with open(output_file, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=["sample_name", "fq1", "fq2"])
@@ -78,6 +79,31 @@ def write_sample_sheet(samples, workflow_path: Path):
         writer.writerows(samples)
 
     return output_file
+
+
+def run_workflow(command: str, workflow_path: Path):
+    """
+    Activate conda environment and execute workflow command.
+    """
+
+    bash_command = f"""
+    source $(conda info --base)/etc/profile.d/conda.sh
+    conda activate snakemake_9_slurm
+    {command}
+    """
+
+    result = subprocess.run(
+        ["bash", "-c", bash_command], cwd=workflow_path, capture_output=True, text=True
+    )
+
+    print("STDOUT:")
+    print(result.stdout)
+
+    print("STDERR:")
+    print(result.stderr)
+
+    if result.returncode != 0:
+        raise RuntimeError("Workflow execution failed")
 
 
 def process_workflow(csv_file: Path):
@@ -96,6 +122,7 @@ def process_workflow(csv_file: Path):
     print(f"Input directory: {input_data_path}")
 
     if not input_data_path.exists():
+        # TODO: log Warning
         print("Input directory does not exist, skipping.")
         return
 
@@ -116,9 +143,8 @@ def process_workflow(csv_file: Path):
     print(f"Sample sheet written to: {sample_sheet}")
     print(f"Samples detected: {len(samples)}")
 
-    # Workflow command could be executed here later
-    # example:
-    # subprocess.run([command], cwd=workflow_path)
+    run_workflow(command, workflow_path)
+    print("run_workflow finished")
 
 
 def main():
