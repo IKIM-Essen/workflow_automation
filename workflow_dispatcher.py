@@ -7,6 +7,7 @@ from pathlib import Path
 from datetime import datetime
 import tempfile
 import re
+import textwrap
 
 
 WORKFLOW_DIR = Path("workflows")
@@ -89,29 +90,27 @@ def submit_workflow(command: str, workflow_path: Path, job_name: str = "workflow
     Returns the Slurm job ID.
     """
 
-    print("workflow_path")
-    print(workflow_path)
-    log_dir = workflow_path / "logs"
-    log_dir.mkdir(exist_ok=True)
+    log_dir = workflow_path / "logs" / "slurm"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_dir_str = str(log_dir.resolve())
 
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    job_name_ts = f"{job_name}_{timestamp}"
     # Dynamisches Slurm-Skript als Text
-    slurm_script = f"""#!/bin/bash
-    #SBATCH --output=logs/slurm/slurm-%j.out
-    #SBATCH --error=logs/slurm/slurm-%j.err
-    #SBATCH --job-name={job_name}
-    #SBATCH --cpus-per-task=8
-    #SBATCH --time=24:00:00
+    slurm_script = textwrap.dedent(
+        f"""\
+    #!/bin/bash
+    #SBATCH --job-name={job_name_ts}
+    #SBATCH --output={log_dir_str}/{job_name_ts}_%j.out
+    #SBATCH --error={log_dir_str}/{job_name_ts}_%j.out
 
     eval "$(/opt/mambaforge/bin/conda shell.bash hook)"
-
     cd {workflow_path}
     conda activate /projects/envs/conda/jzander/envs/snakemake_9_slurm
-    conda env list
-
 
     {command}
     """
-
+    )
     # Temporäre Datei für sbatch
     with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".sh") as f:
         f.write(slurm_script)
