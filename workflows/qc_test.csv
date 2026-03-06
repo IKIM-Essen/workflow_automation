@@ -1,2 +1,2 @@
 name,input_data_path,data_regex,workflow_path,command
-qc_test,/groups/ds/automation/test_data/subsampled,.,/groups/ds/automation/qc_pipeline_test/QC_pre_NextSeq,nice snakemake --cores all --software-deployment-method conda apptainer --singularity-args "--bind /groups/ds/databases_refGenomes/databases" --jobs 2 
+qc_test,/groups/ds/automation/test_data/subsampled,.*,/groups/ds/automation/qc_pipeline_test/QC_pre_NextSeq,nice snakemake --cores all --software-deployment-method conda apptainer --singularity-args "--bind /groups/ds/databases_refGenomes/databases" --jobs 2 
