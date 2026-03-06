@@ -5,6 +5,8 @@ import re
 import subprocess
 from pathlib import Path
 from datetime import datetime
+import tempfile
+import re
 
 
 WORKFLOW_DIR = Path("workflows")
@@ -81,29 +83,58 @@ def write_sample_sheet(samples, workflow_path: Path):
     return output_file
 
 
-def run_workflow(command: str, workflow_path: Path):
+def submit_workflow(command: str, workflow_path: Path, job_name: str = "workflow_job"):
     """
-    Activate conda environment and execute workflow command.
+    Dynamically create a Slurm script and submit it via sbatch.
+    Returns the Slurm job ID.
     """
 
-    bash_command = f"""
-    source $(conda info --base)/etc/profile.d/conda.sh
-    conda activate snakemake_9_slurm
+    print("workflow_path")
+    print(workflow_path)
+    log_dir = workflow_path / "logs"
+    log_dir.mkdir(exist_ok=True)
+
+    # Dynamisches Slurm-Skript als Text
+    slurm_script = f"""#!/bin/bash
+    #SBATCH --output=logs/slurm/slurm-%j.out
+    #SBATCH --error=logs/slurm/slurm-%j.err
+    #SBATCH --job-name={job_name}
+    #SBATCH --cpus-per-task=8
+    #SBATCH --time=24:00:00
+
+    eval "$(/opt/mambaforge/bin/conda shell.bash hook)"
+
+    cd {workflow_path}
+    conda activate /projects/envs/conda/jzander/envs/snakemake_9_slurm
+    conda env list
+
+
     {command}
     """
 
-    result = subprocess.run(
-        ["bash", "-c", bash_command], cwd=workflow_path, capture_output=True, text=True
-    )
+    # Temporäre Datei für sbatch
+    with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".sh") as f:
+        f.write(slurm_script)
+        script_path = Path(f.name)
 
-    print("STDOUT:")
-    print(result.stdout)
+    # Job einreichen
+    result = subprocess.run(["sbatch", script_path], capture_output=True, text=True)
 
-    print("STDERR:")
-    print(result.stderr)
+    # Slurm gibt typischerweise "Submitted batch job <JOBID>" zurück
+    stdout = result.stdout.strip()
+    stderr = result.stderr.strip()
+    print(stdout)
+    if stderr:
+        print("SBATCH STDERR:", stderr)
 
-    if result.returncode != 0:
-        raise RuntimeError("Workflow execution failed")
+    # Job-ID extrahieren
+
+    match = re.search(r"Submitted batch job (\d+)", stdout)
+    if match:
+        job_id = match.group(1)
+        return job_id
+    else:
+        return None
 
 
 def process_workflow(csv_file: Path):
@@ -143,8 +174,10 @@ def process_workflow(csv_file: Path):
     print(f"Sample sheet written to: {sample_sheet}")
     print(f"Samples detected: {len(samples)}")
 
-    run_workflow(command, workflow_path)
-    print("run_workflow finished")
+    # run_workflow(command, workflow_path)
+    job_id = submit_workflow(command, workflow_path, job_name=config["name"])
+
+    print(f"Workflow {config['name']} submitted as job {job_id}")
 
 
 def main():
