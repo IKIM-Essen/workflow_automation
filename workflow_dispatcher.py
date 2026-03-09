@@ -161,81 +161,74 @@ def submit_workflow(
 
 
 def process_workflow(csv_file: Path):
-    """Process one workflow configuration."""
+    """Process one workflow configuration for all runs in the input_data_path."""
     print(f"\nProcessing workflow config: {csv_file}")
 
     config = load_workflow_config(csv_file)
 
-    name = config["name"]
+    workflow_name = config["name"]
     input_data_path = Path(config["input_data_path"])
     data_regex = config["data_regex"]
     workflow_path = Path(config["workflow_path"])
     command = config["command"]
 
-    print(f"Pipeline: {name}")
+    print(f"Pipeline: {workflow_name}")
     print(f"Input directory: {input_data_path}")
 
     if not input_data_path.exists():
-        # TODO: log Warning
         print("Input directory does not exist, skipping.")
         return
 
-    files = find_matching_fastqs(input_data_path, data_regex)
+    # Alle Unterordner als separate Runs behandeln
+    for run_dir in sorted(p for p in input_data_path.iterdir() if p.is_dir()):
+        print(f"\nChecking run folder: {run_dir.name}")
 
-    if not files:
-        print("No matching FASTQ files found.")
-        return
+        # Status-Ordner für den Run
+        status_dir = run_dir / "workflow_status"
+        status_dir.mkdir(exist_ok=True)
 
-    samples = build_sample_table(files)
+        run_flag = status_dir / f"{workflow_name}.run"
+        done_flag = status_dir / f"{workflow_name}.done"
 
-    if not samples:
-        print("No complete R1/R2 pairs detected.")
-        return
+        if done_flag.exists():
+            print(f"{run_dir.name}: {workflow_name} already DONE, skipping")
+            continue
 
-    sample_sheet = write_sample_sheet(samples, workflow_path)
-    # TODO: Write Config here
+        if run_flag.exists():
+            print(f"{run_dir.name}: {workflow_name} already RUNNING, skipping")
+            continue
 
-    print(f"Sample sheet written to: {sample_sheet}")
-    print(f"Samples detected: {len(samples)}")
+        # Alle passenden FASTQ-Dateien finden
+        files = find_matching_fastqs(run_dir, data_regex)
 
-    # run_workflow(command, workflow_path)
-    # job_id = submit_workflow(command, workflow_path, name, job_name=config["name"])
-    process_sample(workflow_path, input_data_path, name, command)
+        if not files:
+            print(f"{run_dir.name}: no matching FASTQ files found, skipping")
+            continue
 
-    # print(f"Workflow {config['name']} submitted as job {job_id}")
+        samples = build_sample_table(files)
+
+        if not samples:
+            print(f"{run_dir.name}: no complete R1/R2 pairs detected, skipping")
+            continue
+
+        # Sample sheet schreiben
+        sample_sheet = write_sample_sheet(samples, workflow_path)
+        print(f"Sample sheet written to: {sample_sheet}")
+        print(f"Samples detected: {len(samples)}")
+
+        # Workflow starten
+        process_sample(workflow_path, workflow_name, command, status_dir=status_dir)
 
 
 def process_sample(
-    workflow_path: Path, input_data_path: Path, workflow_name: str, command: str
+    workflow_path: Path, workflow_name: str, command: str, status_dir: Path
 ):
     """
-    Handles workflow status and dispatching.
+    Starts the workflow job for a run. Status already checked by caller.
     """
 
-    status_dir = input_data_path / "status"
-    status_dir.mkdir(parents=True, exist_ok=True)
-
-    print("status_dir")
-    print(status_dir)
-
     run_flag = status_dir / f"{workflow_name}.run"
-    done_flag = status_dir / f"{workflow_name}.done"
-    failed_flag = status_dir / f"{workflow_name}.failed"
-
-    if done_flag.exists():
-        print(f"{workflow_name}: already DONE")
-        return
-
-    if run_flag.exists():
-        print(f"{workflow_name}: already RUNNING")
-        return
-
-    if failed_flag.exists():
-        print(f"{workflow_name}: already FAILED. Trying again.")
-
-    print(f"{workflow_name}: starting workflow")
-
-    run_flag.touch()
+    run_flag.touch()  # workflow startet → run marker
 
     job_id = submit_workflow(
         command, workflow_path, workflow_name, status_dir, job_name=workflow_name
