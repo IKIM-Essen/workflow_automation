@@ -84,7 +84,13 @@ def write_sample_sheet(samples, workflow_path: Path):
     return output_file
 
 
-def submit_workflow(command: str, workflow_path: Path, job_name: str = "workflow_job"):
+def submit_workflow(
+    command: str,
+    workflow_path: Path,
+    workflow_name: str,
+    status_dir: Path,
+    job_name: str = "workflow_job",
+):
     """
     Dynamically create a Slurm script and submit it via sbatch.
     Returns the Slurm job ID.
@@ -99,17 +105,35 @@ def submit_workflow(command: str, workflow_path: Path, job_name: str = "workflow
     # Dynamisches Slurm-Skript als Text
     slurm_script = textwrap.dedent(
         f"""\
-    #!/bin/bash
-    #SBATCH --job-name={job_name_ts}
-    #SBATCH --output={log_dir_str}/{job_name_ts}_%j.out
-    #SBATCH --error={log_dir_str}/{job_name_ts}_%j.out
+        #!/bin/bash
+        #SBATCH --job-name={job_name_ts}
+        #SBATCH --output={log_dir_str}/{job_name_ts}_%j.out
+        #SBATCH --error={log_dir_str}/{job_name_ts}_%j.out
 
-    eval "$(/opt/mambaforge/bin/conda shell.bash hook)"
-    cd {workflow_path}
-    conda activate /projects/envs/conda/jzander/envs/snakemake_9_slurm
+        set -euo pipefail
 
-    {command}
-    """
+        STATUS_DIR="{status_dir}"
+        WORKFLOW="{workflow_name}"
+
+        cleanup_success() {{
+            rm -f "$STATUS_DIR/${{WORKFLOW}}.running"
+            touch "$STATUS_DIR/${{WORKFLOW}}.done"
+        }}
+
+        cleanup_fail() {{
+            rm -f "$STATUS_DIR/${{WORKFLOW}}.running"
+            touch "$STATUS_DIR/${{WORKFLOW}}.failed"
+        }}
+
+        trap cleanup_fail ERR
+        trap cleanup_success EXIT
+
+        eval "$(/opt/mambaforge/bin/conda shell.bash hook)"
+        cd {workflow_path}
+        conda activate /projects/envs/conda/jzander/envs/snakemake_9_slurm
+
+        {command}
+        """
     )
     # Temporäre Datei für sbatch
     with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".sh") as f:
@@ -169,14 +193,55 @@ def process_workflow(csv_file: Path):
         return
 
     sample_sheet = write_sample_sheet(samples, workflow_path)
+    # TODO: Write Config here
 
     print(f"Sample sheet written to: {sample_sheet}")
     print(f"Samples detected: {len(samples)}")
 
     # run_workflow(command, workflow_path)
-    job_id = submit_workflow(command, workflow_path, job_name=config["name"])
+    # job_id = submit_workflow(command, workflow_path, name, job_name=config["name"])
+    process_sample(workflow_path, input_data_path, name, command)
 
-    print(f"Workflow {config['name']} submitted as job {job_id}")
+    # print(f"Workflow {config['name']} submitted as job {job_id}")
+
+
+def process_sample(
+    workflow_path: Path, input_data_path: Path, workflow_name: str, command: str
+):
+    """
+    Handles workflow status and dispatching.
+    """
+
+    status_dir = input_data_path / "status"
+    status_dir.mkdir(parents=True, exist_ok=True)
+
+    print("status_dir")
+    print(status_dir)
+
+    run_flag = status_dir / f"{workflow_name}.run"
+    done_flag = status_dir / f"{workflow_name}.done"
+    failed_flag = status_dir / f"{workflow_name}.failed"
+
+    if done_flag.exists():
+        print(f"{workflow_name}: already DONE")
+        return
+
+    if run_flag.exists():
+        print(f"{workflow_name}: already RUNNING")
+        return
+
+    if failed_flag.exists():
+        print(f"{workflow_name}: already FAILED. Trying again.")
+
+    print(f"{workflow_name}: starting workflow")
+
+    run_flag.touch()
+
+    job_id = submit_workflow(
+        command, workflow_path, workflow_name, status_dir, job_name=workflow_name
+    )
+
+    print(f"{workflow_name}: submitted as job {job_id}")
 
 
 def main():
