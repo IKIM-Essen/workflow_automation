@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import csv
 import re
 import subprocess
@@ -7,7 +5,10 @@ from pathlib import Path
 from datetime import datetime
 import tempfile
 import textwrap
+import logging
 
+LOG_DIR = Path(__file__).parent / "logs"
+LOG_DIR.mkdir(exist_ok=True)
 
 WORKFLOW_DIR = Path("workflows")
 
@@ -91,14 +92,11 @@ def submit_workflow(
         ["sbatch", script_path], capture_output=True, text=True, check=True
     )
 
-    # Slurm returns  "Submitted batch job <JOBID>"
     stdout = result.stdout.strip()
     stderr = result.stderr.strip()
-    print(stdout)
     if stderr:
-        print("SBATCH STDERR:", stderr)
+        logging.warning("SBATCH STDERR: %s", stderr)
 
-    # extract Job-ID
     match = re.search(r"Submitted batch job (\d+)", stdout)
     if match:
         job_id = match.group(1)
@@ -108,7 +106,6 @@ def submit_workflow(
 
 
 def update_run_date(workflow_path: Path, run_name: str):
-
     config_file = workflow_path / "config" / "config.yaml"
 
     if not config_file.exists():
@@ -146,12 +143,13 @@ def get_run_status(run_dir: Path, workflow_name: str, input_data_path: Path):
     if run_flag.exists():
         return "RUNNING", status_dir
 
-    # Check if workflow is running in other folders
     for s in input_data_path.glob("*/workflow_status"):
         if s == status_dir:
-            continue  # skip current run_dir
+            continue
         if (s / f"{workflow_name}.run").exists():
-            print(f"{workflow_name}: already running in {s.parent.resolve()}. Waiting.")
+            logging.info(
+                "%s: already running in %s. Waiting.", workflow_name, s.parent.resolve()
+            )
             return "BLOCKED", status_dir
 
     return "READY", status_dir
@@ -168,16 +166,13 @@ def prepare_samples(run_dir: Path, data_regex: str):
 
     for f in files:
         name = f.name
-
         if "_R1" in name:
             sample = re.sub(r"_R1", "", name).replace(".fastq.gz", "")
             samples.setdefault(sample, {})["fq1"] = f
-
         elif "_R2" in name:
             sample = re.sub(r"_R2", "", name).replace(".fastq.gz", "")
             samples.setdefault(sample, {})["fq2"] = f
 
-    # keep only complete pairs
     result = []
     for sample, reads in samples.items():
         if "fq1" in reads and "fq2" in reads:
@@ -197,29 +192,31 @@ def prepare_samples(run_dir: Path, data_regex: str):
     return samples, None
 
 
-def start_workflow(
-    workflow_path: Path,
-    workflow_name: str,
-    command: str,
-    status_dir: Path,
-):
-    status_dir.mkdir(exist_ok=True)
-
-    run_flag = status_dir / f"{workflow_name}.run"
-    run_flag.touch()
-
-    job_id = submit_workflow(
-        command,
-        workflow_path,
-        workflow_name,
-        status_dir,
+def setup_logging():
+    log_file = LOG_DIR / "workflow.log"
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=[
+            logging.FileHandler(log_file, encoding="utf-8"),
+            logging.StreamHandler(),
+        ],
     )
 
-    print(f"{workflow_name}: submitted as job {job_id}")
+
+def start_workflow(
+    workflow_path: Path, workflow_name: str, command: str, status_dir: Path
+):
+    status_dir.mkdir(exist_ok=True)
+    run_flag = status_dir / f"{workflow_name}.run"
+    run_flag.touch()
+    job_id = submit_workflow(command, workflow_path, workflow_name)
+    logging.info("%s: submitted as job %s", workflow_name, job_id)
 
 
 def process_workflow(csv_file: Path):
-    print(f"\nProcessing workflow config: {csv_file}")
+    logging.info("Processing workflow config: %s", csv_file)
 
     configs = load_workflow_config(csv_file)
 
@@ -230,59 +227,52 @@ def process_workflow(csv_file: Path):
         workflow_path = Path(config["workflow_path"])
         command = config["command"]
 
-        print(f"\nPipeline: {workflow_name}")
-        print(f"Input directory: {input_data_path}")
+        logging.info("Pipeline: %s", workflow_name)
+        logging.info("Input directory: %s", input_data_path)
 
         if not input_data_path.exists():
-            print("Input directory does not exist, skipping.")
+            logging.warning("Input directory does not exist, skipping.")
             continue
 
         for run_dir in sorted(p for p in input_data_path.rglob("*") if p.is_dir()):
             if run_dir.name == "workflow_status":
                 continue
 
-            print(f"\nChecking run folder: {run_dir.name}")
+            logging.info("Checking run folder: %s", run_dir.name)
 
             status, status_dir = get_run_status(run_dir, workflow_name, input_data_path)
 
             if status == "DONE":
-                print(f"{run_dir.name}: already DONE")
+                logging.info("%s: already DONE", run_dir.name)
                 continue
-
             if status == "RUNNING":
-                print(f"{run_dir.name}: already RUNNING")
+                logging.info("%s: already RUNNING", run_dir.name)
                 continue
-
             if status == "BLOCKED":
                 return
 
             samples, error = prepare_samples(run_dir, data_regex)
-
             if error:
-                print(f"{run_dir.name}: {error}, skipping")
+                logging.warning("%s: %s, skipping", run_dir.name, error)
                 continue
 
             sample_sheet = write_sample_sheet(samples, workflow_path)
-            print(f"Sample sheet written to: {sample_sheet}")
+            logging.info("Sample sheet written to: %s", sample_sheet)
 
             timestamp = update_run_date(workflow_path, run_dir.name)
-            print(f"Updated run-date to {timestamp}")
+            logging.info("Updated run-date to %s", timestamp)
 
-            start_workflow(
-                workflow_path,
-                workflow_name,
-                command,
-                status_dir,
-            )
+            start_workflow(workflow_path, workflow_name, command, status_dir)
 
             return
 
 
 def main():
+    setup_logging()
     workflow_csvs = sorted(WORKFLOW_DIR.glob("*.csv"))
 
     if not workflow_csvs:
-        print("No workflow CSV files found.")
+        logging.warning("No workflow CSV files found.")
         return
 
     for csv_file in workflow_csvs:
