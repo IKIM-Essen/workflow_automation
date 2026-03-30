@@ -1,18 +1,10 @@
 # workflow_automation
 
-
-## ToDo
-- Add logger
-- Add workflow description
-- Instructions how to add pipeline
-- Instructions ho to run pipeline in container?
-- Add env.yml
-- Add test
-
 ## How to Run
 
-- `conda activate workflow_dispatcher`
-- `python workflow_dispatcher.py`
+- Set up env: `conda env create --file=Environment.yaml`
+- Activate env: `conda activate workflow_dispatcher`
+- Run dispacter: `python workflow_dispatcher.py`
 
 ## Workflow logic (summary)
 - Workflow configurations are loaded from CSV files in workflows/.
@@ -44,15 +36,30 @@
 ## Troubleshooting
 
 ### Folder locked
-*Problem:*
+**Problem:**
 LockException:
 Error: Directory cannot be locked. Please make sure that no other Snakemake process is trying to create the same files in the following directory:
 /groups/ds/automation/qc_pipeline_test/QC_pre_NextSeq
 
-*Solution:*
+**Solution:**
 `cd /path/to/snakemake/workflow`
 `conda activate snakemake_9_slurm`
 `snakemake --unlock`
+
+## Add your workflow to the running automation
+
+- Create a .csv in the `workflows` folder
+- The csv has to contain: `name,input_data_path,data_regex,workflow_path,command`
+    - `name`: Name of your workflow
+    - `input_data_path`: folder that shall be monitored for new fasta files
+    - `data_regex`: regex that all files that shall be processed match
+    - `workflow_path`: Path to the snakemake worfklow version that shall be executed
+    - `command`: Terminal command that has to be executed from the `workflow_path` to start the workflow
+- Each csv file can contain multiple lines with different regex and commands for the same workflow
+- Example: `workflows/qc_test.csv`
+
+## Containerise your workflow
+See `containerise/README.md`
 
 ## TBD
 - Shall a new sample.csv sheet be created for every run? -> Can we just overwrite sample.csv? -> Yes
@@ -63,3 +70,6 @@ Error: Directory cannot be locked. Please make sure that no other Snakemake proc
 - What happens if the same workflow starts for two different sequencer outputs? Will that happen? One Workflow container per sequencer? -> One container is sufficient
 - Can multiple users controll one cron job? Automation user that can be used from different people? -> Ask Marcel
 - Clean up -> move results to "output" folder and delete everything else? -> Not needed
+
+## ToDo
+- Add test
