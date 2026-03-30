@@ -1,19 +1,15 @@
 # workflow_automation
 
-## Run
-
-- python workflow_dispatcher.py
 
 ## ToDo
 - Add logger
 - Add workflow description
 - Instructions how to add pipeline
 - Instructions ho to run pipeline in container?
-- Overwrite config.yaml run_date
 - Add env.yml
 - Add test
 
-## How to use
+## How to Run
 
 - `conda activate workflow_dispatcher`
 - `python workflow_dispatcher.py`
@@ -44,6 +40,19 @@
 - Execution order:
     - Only one workflow is submitted at a time per configuration.
     - Subfolders are treated as separate runs, independent from each other.
+
+## Troubleshooting
+
+### Folder locked
+*Problem:*
+LockException:
+Error: Directory cannot be locked. Please make sure that no other Snakemake process is trying to create the same files in the following directory:
+/groups/ds/automation/qc_pipeline_test/QC_pre_NextSeq
+
+*Solution:*
+`cd /path/to/snakemake/workflow`
+`conda activate snakemake_9_slurm`
+`snakemake --unlock`
 
 ## TBD
 - Shall a new sample.csv sheet be created for every run? -> Can we just overwrite sample.csv? -> Yes
