@@ -3,6 +3,8 @@
 ## How to Run
 
 Run on a slurm node:
+- Clone repo
+- Add your workflow to `workflows` folder
 - Set up env: `conda env create --file=Environment.yaml`
 - Activate env: `conda activate workflow_dispatcher`
 - Run dispacter: `python workflow_dispatcher.py`
