@@ -11,6 +11,7 @@ LOG_DIR = Path(__file__).parent / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
 WORKFLOW_DIR = Path("workflows")
+EXCLUDE_SAMPLE_NAME = "Undetermined"
 
 
 def load_workflow_config(csv_file: Path):
@@ -166,6 +167,8 @@ def prepare_samples(run_dir: Path, data_regex: str):
 
     for f in files:
         name = f.name
+        if name.startswith(EXCLUDE_SAMPLE_NAME):
+            continue
         if "_R1" in name:
             sample = re.sub(r"_R1", "", name).replace(".fastq.gz", "")
             samples.setdefault(sample, {})["fq1"] = f

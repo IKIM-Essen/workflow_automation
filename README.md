@@ -23,6 +23,7 @@ Run on a slurm node:
     - All FASTQ files in a run folder matching data_regex are collected.
     - _R1 and _R2 in filenames are removed to determine sample names.
     - Only complete R1/R2 pairs are kept.
+    - Ignores all files starting with "Undetermined"
 - Sample sheet creation:
     - For each run, a CSV file samples.csv is written in workflow_path/config/pep.
 - Workflow status handling:
