@@ -31,6 +31,10 @@ Activate env with snakemake 9
 Run via slurm
 `nice snakemake --cores all --software-deployment-method conda apptainer --singularity-args "--bind /groups/ds/databases_refGenomes/databases" --jobs 2 -n`
 
+### Mount Database
+The --singularity-args option allows passing additional arguments to the container runtime (Apptainer/Singularity). In this case, `--bind /groups/ds/databases_refGenomes/databases` mounts a host directory into the container so that reference databases are accessible during execution.
+
+If your databases are stored in a different location, you must adjust this path accordingly. The general format is `--bind <host_path>:<container_path>`, where `<host_path>` is the directory on your system and `<container_path>` is the path inside the container (if omitted, the same path is used inside the container).
 ## Further information
 
 https://snakemake.readthedocs.io/en/stable/snakefiles/deployment.html#containerization-of-conda-based-workflows 
