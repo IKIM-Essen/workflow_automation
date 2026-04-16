@@ -7,7 +7,7 @@ Run on a slurm node:
 - Add your workflow to `workflows` folder
 - Set up env: `conda env create --file=Environment.yaml`
 - Activate env: `conda activate workflow_dispatcher`
-- Run dispacter: `python workflow_dispatcher.py`
+- Run dispatcher: `python workflow_dispatcher.py`
 
 ## Workflow logic (summary)
 - Workflow configurations are loaded from CSV files in workflows/.
