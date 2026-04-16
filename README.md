@@ -77,4 +77,5 @@ See `containerise/README.md`
 
 ## ToDo
 - Ignore empty fasta.gz files like "/projects/seqlab/incoming-humgen/20260323_LH00204_0121_B23JH5HLT3/Analysis/1/Data/BCLConvert/fastq/WWOZ2501*"
+- Remove hard coded conda env from workflow_dispatcher.py
 - Add test
