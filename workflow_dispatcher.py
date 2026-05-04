@@ -3,6 +3,7 @@ import re
 import subprocess
 from pathlib import Path
 from datetime import datetime
+from enum import Enum, auto
 import tempfile
 import textwrap
 import logging
@@ -12,6 +13,15 @@ LOG_DIR.mkdir(exist_ok=True)
 
 WORKFLOW_DIR = Path("workflows")
 EXCLUDE_SAMPLE_NAME = "Undetermined"
+STATUS_CSV = Path(__file__).parent / "sample_status.csv"
+COPY_COMPLETE_NAME = "copycomplete.txt"
+
+
+class RunStatus(Enum):
+    READY = auto()
+    DONE = auto()
+    RUNNING = auto()
+    BLOCKED = auto()
 
 
 def load_workflow_config(csv_file: Path):
@@ -52,8 +62,7 @@ def submit_workflow(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     job_name_ts = f"{job_name}_{timestamp}"
 
-    slurm_script = textwrap.dedent(
-        f"""\
+    slurm_script = textwrap.dedent(f"""\
         #!/bin/bash
         #SBATCH --job-name={job_name_ts}
         #SBATCH --output={log_dir_str}/%j.out
@@ -82,8 +91,7 @@ def submit_workflow(
         conda activate /projects/envs/conda/jzander/envs/snakemake_9_slurm
 
         {command}
-        """
-    )
+        """)
     with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".sh") as f:
         f.write(slurm_script)
         script_path = Path(f.name)
@@ -136,13 +144,13 @@ def get_run_status(run_dir: Path, workflow_name: str, input_data_path: Path):
     done_flag = status_dir / f"{workflow_name}.done"
 
     if not status_dir.exists():
-        return "READY", status_dir
+        return RunStatus.READY, status_dir
 
     if done_flag.exists():
-        return "DONE", status_dir
+        return RunStatus.DONE, status_dir
 
     if run_flag.exists():
-        return "RUNNING", status_dir
+        return RunStatus.RUNNING, status_dir
 
     for s in input_data_path.glob("*/workflow_status"):
         if s == status_dir:
@@ -151,9 +159,60 @@ def get_run_status(run_dir: Path, workflow_name: str, input_data_path: Path):
             logging.info(
                 "%s: already running in %s. Waiting.", workflow_name, s.parent.resolve()
             )
-            return "BLOCKED", status_dir
+            return RunStatus.BLOCKED, status_dir
 
-    return "READY", status_dir
+    return RunStatus.READY, status_dir
+
+
+def is_copy_complete(run_dir: Path):
+
+    for parent in run_dir.parents:
+        try:
+            for f in parent.iterdir():
+                if f.is_file() and f.name.lower() == COPY_COMPLETE_NAME:
+                    logging.debug("Found CopyComplete.txt in %s", parent)
+                    return True
+        except PermissionError:
+            continue
+
+    logging.debug("No CopyComplete.txt found for %s", run_dir)
+    return False
+
+
+def update_sample_status_csv(
+    samples: list[dict],
+    workflow_name: str,
+    status: RunStatus,
+):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Load existing file
+    rows = {}
+    if STATUS_CSV.exists():
+        with open(STATUS_CSV, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for r in reader:
+                key = (r["sample_name"], r["workflow_name"])
+                rows[key] = r
+
+    # Update / Insert
+    for s in samples:
+        key = (s["sample_name"], workflow_name)
+        rows[key] = {
+            "sample_name": s["sample_name"],
+            "workflow_name": workflow_name,
+            "status": status.name,
+            "last_updated": timestamp,
+        }
+
+    # Write
+    with open(STATUS_CSV, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=["sample_name", "workflow_name", "status", "last_updated"],
+        )
+        writer.writeheader()
+        writer.writerows(rows.values())
 
 
 def prepare_samples(run_dir: Path, data_regex: str):
@@ -218,6 +277,7 @@ def start_workflow(
     logging.info("%s: submitted as job %s", workflow_name, job_id)
 
 
+# TODO: Path shall be also added
 def process_workflow(csv_file: Path):
     logging.info("Processing workflow config: %s", csv_file)
 
@@ -243,21 +303,39 @@ def process_workflow(csv_file: Path):
 
             logging.info("Checking run folder: %s", run_dir.name)
 
+            if not is_copy_complete(run_dir):
+                logging.info(
+                    "%s: copy not finished yet (CopyComplete.txt missing)", run_dir.name
+                )
+                continue
+
             status, status_dir = get_run_status(run_dir, workflow_name, input_data_path)
 
-            if status == "DONE":
-                logging.info("%s: already DONE", run_dir.name)
-                continue
-            if status == "RUNNING":
-                logging.info("%s: already RUNNING", run_dir.name)
-                continue
-            if status == "BLOCKED":
-                return
-
             samples, error = prepare_samples(run_dir, data_regex)
-            if error:
+            if error or samples is None:
                 logging.warning("%s: %s, skipping", run_dir.name, error)
                 continue
+
+            match status:
+                case RunStatus.DONE:
+                    logging.info("%s: already DONE", run_dir.name)
+                    update_sample_status_csv(
+                        samples,
+                        workflow_name,
+                        RunStatus.DONE,
+                    )
+                    continue
+                case RunStatus.RUNNING:
+                    logging.info("%s: already RUNNING", run_dir.name)
+                    continue
+                case RunStatus.BLOCKED:
+                    return
+
+            update_sample_status_csv(
+                samples,
+                workflow_name,
+                RunStatus.READY,
+            )
 
             sample_sheet = write_sample_sheet(samples, workflow_path)
             logging.info("Sample sheet written to: %s", sample_sheet)
@@ -266,6 +344,12 @@ def process_workflow(csv_file: Path):
             logging.info("Updated run-date to %s", timestamp)
 
             start_workflow(workflow_path, workflow_name, command, status_dir)
+
+            update_sample_status_csv(
+                samples,
+                workflow_name,
+                RunStatus.RUNNING,
+            )
 
             return
 
