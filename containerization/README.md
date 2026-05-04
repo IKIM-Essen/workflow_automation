@@ -1,8 +1,14 @@
-# Containerise your workflow
+# Containerize your workflow
 
-All steps must be completed with your own workflow. Copy the  `containerisation` folder from this repository into your own snakemake workflow.
+All steps must be completed with your own workflow. Copy the  `containerization` folder from this repository into your own snakemake workflow.
 
 ## Generate Container
+
+### Build snakemake envs
+
+All envs that shall run in the container must have been created prior to containerization
+
+If not already build create only the envs via `--conda-create-envs-only` snakemake flag
 
 ### Create Dockerfile
   
