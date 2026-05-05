@@ -50,17 +50,14 @@ def write_sample_sheet(samples, workflow_path: Path):
 
 
 def submit_workflow(
-    command: str,
-    workflow_path: Path,
-    workflow_name: str,
-    job_name: str = "workflow_job",
+    command: str, workflow_path: Path, workflow_name: str, status_dir: Path
 ):
     log_dir = workflow_path / "logs" / "slurm"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_dir_str = str(log_dir.resolve())
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    job_name_ts = f"{job_name}_{timestamp}"
+    job_name_ts = "workflow_job_" + str(timestamp)
 
     slurm_script = textwrap.dedent(f"""\
         #!/bin/bash
@@ -70,7 +67,7 @@ def submit_workflow(
 
         set -euo pipefail
 
-        STATUS_DIR="{workflow_path}"
+        STATUS_DIR="{status_dir}"
         WORKFLOW="{workflow_name}"
 
         cleanup_success() {{
@@ -152,7 +149,9 @@ def get_run_status(run_dir: Path, workflow_name: str, input_data_path: Path):
     if run_flag.exists():
         return RunStatus.RUNNING, status_dir
 
-    for s in input_data_path.glob("*/workflow_status"):
+    # TODO: Fix Blocked
+    for s in input_data_path.rglob("*/workflow_status"):
+        # for s in input_data_path.glob("*/workflow_status"):
         if s == status_dir:
             continue
         if (s / f"{workflow_name}.run").exists():
@@ -273,7 +272,7 @@ def start_workflow(
     status_dir.mkdir(exist_ok=True)
     run_flag = status_dir / f"{workflow_name}.run"
     run_flag.touch()
-    job_id = submit_workflow(command, workflow_path, workflow_name)
+    job_id = submit_workflow(command, workflow_path, workflow_name, status_dir)
     logging.info("%s: submitted as job %s", workflow_name, job_id)
 
 
@@ -327,7 +326,7 @@ def process_workflow(csv_file: Path):
                     continue
                 case RunStatus.RUNNING:
                     logging.info("%s: already RUNNING", run_dir.name)
-                    continue
+                    return
                 case RunStatus.BLOCKED:
                     return
 
