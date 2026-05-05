@@ -209,18 +209,26 @@ def is_copy_complete(run_dir: Path):
     return False
 
 
+def is_valid_fastq(file: Path, min_size_bytes: int = 100):
+    try:
+        return file.stat().st_size > min_size_bytes
+    except OSError:
+        return False
+
+
 def prepare_samples(run_dir: Path, data_regex: str):
     pattern = re.compile(data_regex)
     files = [p for p in run_dir.glob("*.fastq.gz") if pattern.search(p.name)]
 
     if not files:
-        return [], "no FASTQ files"
+        return []
 
     samples = {}
 
     for f in files:
         name = f.name
         if name.startswith(EXCLUDE_SAMPLE_NAME):
+            logging.warning("Skipping %s: Starts with <%s>", name, EXCLUDE_SAMPLE_NAME)
             continue
 
         if "_R1" in name:
@@ -233,8 +241,19 @@ def prepare_samples(run_dir: Path, data_regex: str):
     result = []
     for sample, reads in samples.items():
         if "fq1" in reads and "fq2" in reads:
-            fq1 = reads["fq1"].resolve()
-            fq2 = reads["fq2"].resolve()
+            fq1 = reads["fq1"]
+            fq2 = reads["fq2"]
+
+            if not is_valid_fastq(fq1):
+                logging.warning("Skipping %s: fq1 is empty (%s)", sample, fq1)
+                continue
+
+            if not is_valid_fastq(fq2):
+                logging.warning("Skipping %s: fq2 is empty (%s)", sample, fq2)
+                continue
+
+            fq1 = fq1.resolve()
+            fq2 = fq2.resolve()
 
             result.append(
                 Sample(
@@ -247,10 +266,7 @@ def prepare_samples(run_dir: Path, data_regex: str):
 
     samples = sorted(result, key=lambda x: x.sample_name)
 
-    if not samples:
-        return [], "no R1/R2 pairs"
-
-    return samples, None
+    return samples
 
 
 def update_sample_status_csv(
@@ -343,7 +359,8 @@ def process_workflow(csv_file: Path):
             logging.warning("Input directory does not exist, skipping.")
             continue
 
-        for run_dir in sorted(p for p in input_data_path.rglob("*") if p.is_dir()):
+        run_dirs = set(p.parent for p in input_data_path.rglob("*.fastq.gz"))
+        for run_dir in sorted(run_dirs):
             if run_dir.name == "workflow_status":
                 continue
 
@@ -357,9 +374,8 @@ def process_workflow(csv_file: Path):
 
             status, status_dir = get_run_status(run_dir, workflow_name, input_data_path)
 
-            samples, error = prepare_samples(run_dir, data_regex)
-            if error or samples is None:
-                logging.warning("%s: %s, skipping", run_dir.name, error)
+            samples = prepare_samples(run_dir, data_regex)
+            if not samples or samples == []:
                 continue
 
             match status:
