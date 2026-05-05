@@ -3,6 +3,8 @@ import re
 import subprocess
 from pathlib import Path
 from datetime import datetime
+from dataclasses import dataclass
+from pathlib import Path
 from enum import Enum, auto
 import tempfile
 import textwrap
@@ -24,6 +26,14 @@ class RunStatus(Enum):
     BLOCKED = auto()
 
 
+@dataclass
+class Sample:
+    sample_name: str
+    fq1: str
+    fq2: str
+    sample_path: str
+
+
 def load_workflow_config(csv_file: Path):
     with open(csv_file, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -35,7 +45,7 @@ def load_workflow_config(csv_file: Path):
     return configs
 
 
-def write_sample_sheet(samples, workflow_path: Path):
+def write_sample_sheet(samples: list[Sample], workflow_path: Path):
     pep_dir = workflow_path / "config" / "pep"
     pep_dir.mkdir(parents=True, exist_ok=True)
 
@@ -44,7 +54,15 @@ def write_sample_sheet(samples, workflow_path: Path):
     with open(output_file, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=["sample_name", "fq1", "fq2"])
         writer.writeheader()
-        writer.writerows(samples)
+
+        writer.writerows(
+            {
+                "sample_name": s.sample_name,
+                "fq1": s.fq1,
+                "fq2": s.fq2,
+            }
+            for s in samples
+        )
 
     return output_file
 
@@ -140,6 +158,15 @@ def get_run_status(run_dir: Path, workflow_name: str, input_data_path: Path):
     run_flag = status_dir / f"{workflow_name}.run"
     done_flag = status_dir / f"{workflow_name}.done"
 
+    for s in input_data_path.rglob("workflow_status"):
+        if s == status_dir:
+            continue
+        if (s / f"{workflow_name}.run").exists():
+            logging.info(
+                "%s: already running in %s. Blocked.", workflow_name, s.parent.resolve()
+            )
+            return RunStatus.BLOCKED, status_dir
+
     if not status_dir.exists():
         return RunStatus.READY, status_dir
 
@@ -148,17 +175,6 @@ def get_run_status(run_dir: Path, workflow_name: str, input_data_path: Path):
 
     if run_flag.exists():
         return RunStatus.RUNNING, status_dir
-
-    # TODO: Fix Blocked
-    for s in input_data_path.rglob("*/workflow_status"):
-        # for s in input_data_path.glob("*/workflow_status"):
-        if s == status_dir:
-            continue
-        if (s / f"{workflow_name}.run").exists():
-            logging.info(
-                "%s: already running in %s. Waiting.", workflow_name, s.parent.resolve()
-            )
-            return RunStatus.BLOCKED, status_dir
 
     return RunStatus.READY, status_dir
 
@@ -178,12 +194,61 @@ def is_copy_complete(run_dir: Path):
     return False
 
 
+def prepare_samples(run_dir: Path, data_regex: str):
+    pattern = re.compile(data_regex)
+    files = [p for p in run_dir.glob("*.fastq.gz") if pattern.search(p.name)]
+
+    if not files:
+        return [], "no FASTQ files"
+
+    samples = {}
+
+    for f in files:
+        name = f.name
+        if name.startswith(EXCLUDE_SAMPLE_NAME):
+            continue
+
+        if "_R1" in name:
+            sample = re.sub(r"_R1", "", name).replace(".fastq.gz", "")
+            samples.setdefault(sample, {})["fq1"] = f
+        elif "_R2" in name:
+            sample = re.sub(r"_R2", "", name).replace(".fastq.gz", "")
+            samples.setdefault(sample, {})["fq2"] = f
+
+    result = []
+    for sample, reads in samples.items():
+        if "fq1" in reads and "fq2" in reads:
+            fq1 = reads["fq1"].resolve()
+            fq2 = reads["fq2"].resolve()
+
+            result.append(
+                Sample(
+                    sample_name=sample,
+                    fq1=str(fq1),
+                    fq2=str(fq2),
+                    sample_path=str(fq1.parent),
+                )
+            )
+
+    samples = sorted(result, key=lambda x: x.sample_name)
+
+    if not samples:
+        return [], "no R1/R2 pairs"
+
+    return samples, None
+
+
 def update_sample_status_csv(
-    samples: list[dict],
+    samples: list[Sample],
     workflow_name: str,
     status: RunStatus,
 ):
+    if not samples:
+        return
+
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    STATUS_CSV.parent.mkdir(parents=True, exist_ok=True)
 
     # Load existing file
     rows = {}
@@ -196,10 +261,11 @@ def update_sample_status_csv(
 
     # Update / Insert
     for s in samples:
-        key = (s["sample_name"], workflow_name)
+        key = (s.sample_name, workflow_name)
         rows[key] = {
-            "sample_name": s["sample_name"],
+            "sample_name": s.sample_name,
             "workflow_name": workflow_name,
+            "sample_path": s.sample_path,
             "status": status.name,
             "last_updated": timestamp,
         }
@@ -208,49 +274,16 @@ def update_sample_status_csv(
     with open(STATUS_CSV, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=["sample_name", "workflow_name", "status", "last_updated"],
+            fieldnames=[
+                "sample_name",
+                "workflow_name",
+                "sample_path",
+                "status",
+                "last_updated",
+            ],
         )
         writer.writeheader()
         writer.writerows(rows.values())
-
-
-def prepare_samples(run_dir: Path, data_regex: str):
-    pattern = re.compile(data_regex)
-    files = [p for p in run_dir.glob("*.fastq.gz") if pattern.search(p.name)]
-
-    if not files:
-        return None, "no FASTQ files"
-
-    samples = {}
-
-    for f in files:
-        name = f.name
-        if name.startswith(EXCLUDE_SAMPLE_NAME):
-            continue
-        if "_R1" in name:
-            sample = re.sub(r"_R1", "", name).replace(".fastq.gz", "")
-            samples.setdefault(sample, {})["fq1"] = f
-        elif "_R2" in name:
-            sample = re.sub(r"_R2", "", name).replace(".fastq.gz", "")
-            samples.setdefault(sample, {})["fq2"] = f
-
-    result = []
-    for sample, reads in samples.items():
-        if "fq1" in reads and "fq2" in reads:
-            result.append(
-                {
-                    "sample_name": sample,
-                    "fq1": str(reads["fq1"].resolve()),
-                    "fq2": str(reads["fq2"].resolve()),
-                }
-            )
-
-    samples = sorted(result, key=lambda x: x["sample_name"])
-
-    if not samples:
-        return None, "no R1/R2 pairs"
-
-    return samples, None
 
 
 def setup_logging():
@@ -276,7 +309,6 @@ def start_workflow(
     logging.info("%s: submitted as job %s", workflow_name, job_id)
 
 
-# TODO: Path shall be also added
 def process_workflow(csv_file: Path):
     logging.info("Processing workflow config: %s", csv_file)
 
