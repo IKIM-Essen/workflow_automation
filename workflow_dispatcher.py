@@ -17,12 +17,15 @@ WORKFLOW_DIR = Path("workflows")
 EXCLUDE_SAMPLE_NAME = "Undetermined"
 STATUS_CSV = Path(__file__).parent / "sample_status.csv"
 COPY_COMPLETE_NAME = "copycomplete.txt"
+CONDA_ENV_PATH = "/projects/envs/conda/jzander/envs/snakemake_9_slurm"
+CONDA_BASE = "/opt/mambaforge"
 
 
 class RunStatus(Enum):
     READY = auto()
     DONE = auto()
     RUNNING = auto()
+    FAILED = auto()
     BLOCKED = auto()
 
 
@@ -76,37 +79,40 @@ def submit_workflow(
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     job_name_ts = "workflow_job_" + str(timestamp)
+    running = RunStatus.RUNNING.name
+    done = RunStatus.DONE.name
+    failed = RunStatus.FAILED.name
 
     slurm_script = textwrap.dedent(f"""\
-        #!/bin/bash
-        #SBATCH --job-name={job_name_ts}
-        #SBATCH --output={log_dir_str}/%j.out
-        #SBATCH --error={log_dir_str}/%j.out
+    #!/bin/bash
+    #SBATCH --job-name={job_name_ts}
+    #SBATCH --output={log_dir_str}/%j.out
+    #SBATCH --error={log_dir_str}/%j.out
 
-        set -euo pipefail
+    set -euo pipefail
 
-        STATUS_DIR="{status_dir}"
-        WORKFLOW="{workflow_name}"
+    STATUS_DIR="{status_dir}"
+    WORKFLOW="{workflow_name}"
 
-        cleanup_success() {{
-            rm -f "$STATUS_DIR/${{WORKFLOW}}.run"
-            touch "$STATUS_DIR/${{WORKFLOW}}.done"
-        }}
+    cleanup() {{
+        rm -f "$STATUS_DIR/${{WORKFLOW}}.{running}"
+        if [ "$SUCCESS" = true ]; then
+            touch "$STATUS_DIR/${{WORKFLOW}}.{done}"
+        else
+            touch "$STATUS_DIR/${{WORKFLOW}}.{failed}"
+        fi
+    }}
 
-        cleanup_fail() {{
-            rm -f "$STATUS_DIR/${{WORKFLOW}}.run"
-            touch "$STATUS_DIR/${{WORKFLOW}}.failed"
-        }}
+    SUCCESS=true
+    trap 'SUCCESS=false' ERR
+    trap cleanup EXIT
 
-        trap cleanup_fail ERR
-        trap cleanup_success EXIT
+    eval "$({CONDA_BASE}/bin/conda shell.bash hook)"
+    cd {workflow_path}
+    conda activate {CONDA_ENV_PATH}
 
-        eval "$(/opt/mambaforge/bin/conda shell.bash hook)"
-        cd {workflow_path}
-        conda activate /projects/envs/conda/jzander/envs/snakemake_9_slurm
-
-        {command}
-        """)
+    {command}
+    """)
     with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".sh") as f:
         f.write(slurm_script)
         script_path = Path(f.name)
@@ -155,15 +161,21 @@ def update_run_date(workflow_path: Path, run_name: str):
 
 def get_run_status(run_dir: Path, workflow_name: str, input_data_path: Path):
     status_dir = run_dir / "workflow_status"
-    run_flag = status_dir / f"{workflow_name}.run"
-    done_flag = status_dir / f"{workflow_name}.done"
+
+    run_flag = status_dir / f"{workflow_name}.{RunStatus.RUNNING.name}"
+    done_flag = status_dir / f"{workflow_name}.{RunStatus.DONE.name}"
+    failed_flag = status_dir / f"{workflow_name}.{RunStatus.FAILED.name}"
 
     for s in input_data_path.rglob("workflow_status"):
         if s == status_dir:
             continue
-        if (s / f"{workflow_name}.run").exists():
+
+        other_run_flag = s / f"{workflow_name}.{RunStatus.RUNNING.name}"
+        if other_run_flag.exists():
             logging.info(
-                "%s: already running in %s. Blocked.", workflow_name, s.parent.resolve()
+                "%s: already running in %s. Waiting.",
+                workflow_name,
+                s.parent.resolve(),
             )
             return RunStatus.BLOCKED, status_dir
 
@@ -172,6 +184,9 @@ def get_run_status(run_dir: Path, workflow_name: str, input_data_path: Path):
 
     if done_flag.exists():
         return RunStatus.DONE, status_dir
+
+    if failed_flag.exists():
+        return RunStatus.FAILED, status_dir
 
     if run_flag.exists():
         return RunStatus.RUNNING, status_dir
@@ -303,7 +318,7 @@ def start_workflow(
     workflow_path: Path, workflow_name: str, command: str, status_dir: Path
 ):
     status_dir.mkdir(exist_ok=True)
-    run_flag = status_dir / f"{workflow_name}.run"
+    run_flag = status_dir / f"{workflow_name}.{RunStatus.RUNNING.name}"
     run_flag.touch()
     job_id = submit_workflow(command, workflow_path, workflow_name, status_dir)
     logging.info("%s: submitted as job %s", workflow_name, job_id)
@@ -356,17 +371,27 @@ def process_workflow(csv_file: Path):
                         RunStatus.DONE,
                     )
                     continue
+
                 case RunStatus.RUNNING:
                     logging.info("%s: already RUNNING", run_dir.name)
                     return
+
                 case RunStatus.BLOCKED:
                     return
 
-            update_sample_status_csv(
-                samples,
-                workflow_name,
-                RunStatus.READY,
-            )
+                case RunStatus.FAILED:
+                    update_sample_status_csv(
+                        samples,
+                        workflow_name,
+                        RunStatus.FAILED,
+                    )
+
+                case RunStatus.READY:
+                    update_sample_status_csv(
+                        samples,
+                        workflow_name,
+                        RunStatus.READY,
+                    )
 
             sample_sheet = write_sample_sheet(samples, workflow_path)
             logging.info("Sample sheet written to: %s", sample_sheet)
